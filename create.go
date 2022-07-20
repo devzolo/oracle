@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm/clause"
 	gormSchema "gorm.io/gorm/schema"
 
-	"github.com/cengsin/oracle/clauses"
+	"github.com/devzolo/oracle/clauses"
 )
 
 func Create(db *gorm.DB) {
@@ -134,11 +134,9 @@ func Create(db *gorm.DB) {
 							func(field *gormSchema.Field) {
 								switch insertTo.Kind() {
 								case reflect.Struct:
-									if err = field.Set(insertTo, stmt.Vars[boundVars[field.Name]].(sql.Out).Dest); err != nil {
-										db.AddError(err)
-									}
+									insertTo.FieldByName(field.Name).Set(reflect.ValueOf(stmt.Vars[boundVars[field.Name]]))
 								case reflect.Map:
-									// todo 设置id的值
+									// todo set the value of id
 								}
 							},
 						)
