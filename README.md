@@ -29,7 +29,6 @@ func main() {
     if err != nil {
         // panic error or log error info
     }
-
     // do somethings
 }
 ```
