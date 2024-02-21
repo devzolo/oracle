@@ -24,6 +24,7 @@ type Config struct {
 	DSN               string
 	Conn              *sql.DB
 	DefaultStringSize uint
+	Version           string
 }
 
 type Dialector struct {
@@ -32,6 +33,10 @@ type Dialector struct {
 
 func Open(dsn string) gorm.Dialector {
 	return &Dialector{Config: &Config{DSN: dsn}}
+}
+
+func OpenWithConfig(config Config) gorm.Dialector {
+	return &Dialector{Config: &config}
 }
 
 func New(config Config) gorm.Dialector {
@@ -59,6 +64,18 @@ func (d Dialector) Initialize(db *gorm.DB) (err error) {
 		db.ConnPool = d.Conn
 	} else {
 		db.ConnPool, err = sql.Open(d.DriverName, d.DSN)
+		if err != nil {
+			return err
+		}
+	}
+
+	if d.Version == "" {
+		var version int
+		version, err = d.getOracleVersion(db)
+		if err != nil {
+			return err
+		}
+		d.Version = strconv.Itoa(version)
 	}
 
 	if err = db.Callback().Create().Replace("gorm:create", Create); err != nil {
@@ -78,33 +95,66 @@ func (d Dialector) ClauseBuilders() map[string]clause.ClauseBuilder {
 }
 
 func (d Dialector) RewriteLimit(c clause.Clause, builder clause.Builder) {
+	versionParts := strings.SplitN(d.Config.Version, ".", 2)
+	majorVersion, _ := strconv.Atoi(versionParts[0])
+
 	if limit, ok := c.Expression.(clause.Limit); ok {
-		if stmt, ok := builder.(*gorm.Statement); ok {
-			if _, ok := stmt.Clauses["ORDER BY"]; !ok {
-				s := stmt.Schema
-				builder.WriteString("ORDER BY ")
-				if s != nil && s.PrioritizedPrimaryField != nil {
-					builder.WriteQuoted(s.PrioritizedPrimaryField.DBName)
-					builder.WriteByte(' ')
-				} else {
-					builder.WriteString("(SELECT NULL FROM ")
-					builder.WriteString(d.DummyTableName())
-					builder.WriteString(")")
+
+		if majorVersion >= 12 {
+			if stmt, ok := builder.(*gorm.Statement); ok {
+				if _, ok := stmt.Clauses["ORDER BY"]; !ok {
+					s := stmt.Schema
+					builder.WriteString("ORDER BY ")
+					if s != nil && s.PrioritizedPrimaryField != nil {
+						builder.WriteQuoted(s.PrioritizedPrimaryField.DBName)
+						builder.WriteByte(' ')
+					} else {
+						builder.WriteString("(SELECT NULL FROM ")
+						builder.WriteString(d.DummyTableName())
+						builder.WriteString(")")
+					}
 				}
 			}
-		}
 
-		if offset := limit.Offset; offset > 0 {
-			builder.WriteString(" OFFSET ")
-			builder.WriteString(strconv.Itoa(offset))
-			builder.WriteString(" ROWS")
-		}
+			if offset := limit.Offset; offset > 0 {
+				builder.WriteString(" OFFSET ")
+				builder.WriteString(strconv.Itoa(offset))
+				builder.WriteString(" ROWS")
+			}
 
-		if limit.Limit != nil {
-			if limit := *limit.Limit; limit > 0 {
-				builder.WriteString(" FETCH NEXT ")
-				builder.WriteString(strconv.Itoa(limit))
-				builder.WriteString(" ROWS ONLY")
+			if limit.Limit != 0 {
+				if limit := limit.Limit; limit > 0 {
+					builder.WriteString(" FETCH NEXT ")
+					builder.WriteString(strconv.Itoa(limit))
+					builder.WriteString(" ROWS ONLY")
+				}
+			}
+		} else {
+			if stmt, ok := builder.(*gorm.Statement); ok {
+				if limit.Offset > 0 || limit.Limit > 0 {
+					originalSQL := stmt.SQL.String()
+					undesiredPrefix := "SELECT * FROM GEEMPRES ORDER BY 1"
+					originalSQL = strings.TrimPrefix(originalSQL, undesiredPrefix)
+
+					if _, ok := stmt.Clauses["ORDER BY"]; !ok {
+						s := stmt.Schema
+						builder.WriteString("ORDER BY ")
+						if s != nil && s.PrioritizedPrimaryField != nil {
+							builder.WriteQuoted(s.PrioritizedPrimaryField.DBName)
+						} else {
+							builder.WriteString("1")
+						}
+					}
+
+					wrapperStart := "SELECT * FROM (SELECT GORM_WRAPPER.*, ROWNUM GORM_RN FROM ("
+					wrapperEnd := fmt.Sprintf(") GORM_WRAPPER WHERE ROWNUM <= %d) WHERE GORM_RN > %d", limit.Offset+limit.Limit, limit.Offset)
+
+					finalSQL := wrapperStart + originalSQL + wrapperEnd
+					stmt.SQL.Reset()
+					stmt.SQL.WriteString(finalSQL)
+
+					fmt.Println(finalSQL)
+				}
 			}
 		}
 	}
@@ -152,9 +202,7 @@ func (d Dialector) Explain(sql string, vars ...interface{}) string {
 }
 
 func (d Dialector) DataTypeOf(field *schema.Field) string {
-	if _, found := field.TagSettings["RESTRICT"]; found {
-		delete(field.TagSettings, "RESTRICT")
-	}
+	delete(field.TagSettings, "RESTRICT")
 
 	var sqlType string
 
@@ -212,8 +260,8 @@ func (d Dialector) DataTypeOf(field *schema.Field) string {
 			panic(fmt.Sprintf("invalid sql type %s (%s) for oracle", field.FieldType.Name(), field.FieldType.String()))
 		}
 
-		notNull, _ := field.TagSettings["NOT NULL"]
-		unique, _ := field.TagSettings["UNIQUE"]
+		notNull := field.TagSettings["NOT NULL"]
+		unique := field.TagSettings["UNIQUE"]
 		additionalType := fmt.Sprintf("%s %s", notNull, unique)
 		if value, ok := field.TagSettings["DEFAULT"]; ok {
 			additionalType = fmt.Sprintf("%s %s %s%s", "DEFAULT", value, additionalType, func() string {
@@ -237,4 +285,25 @@ func (d Dialector) SavePoint(tx *gorm.DB, name string) error {
 func (d Dialector) RollbackTo(tx *gorm.DB, name string) error {
 	tx.Exec("ROLLBACK TO SAVEPOINT " + name)
 	return tx.Error
+}
+
+func (d *Dialector) getOracleVersion(db *gorm.DB) (int, error) {
+	var versionString string
+	var majorVersion int
+
+	row := db.Raw("SELECT version FROM product_component_version WHERE product LIKE 'Oracle%'").Row()
+	if err := row.Scan(&versionString); err != nil {
+		return 0, err
+	}
+
+	versionParts := strings.Split(versionString, ".")
+	if len(versionParts) > 0 {
+		var err error
+		majorVersion, err = strconv.Atoi(versionParts[0])
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	return majorVersion, nil
 }

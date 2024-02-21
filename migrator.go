@@ -204,12 +204,12 @@ func (m Migrator) HasIndex(value interface{}, name string) bool {
 // https://docs.oracle.com/database/121/SPATL/alter-index-rename.htm
 func (m Migrator) RenameIndex(value interface{}, oldName, newName string) error {
 	panic("TODO")
-	return m.RunWithValue(value, func(stmt *gorm.Statement) error {
-		return m.DB.Exec(
-			"ALTER INDEX ?.? RENAME TO ?", // wat
-			clause.Table{Name: stmt.Table}, clause.Column{Name: oldName}, clause.Column{Name: newName},
-		).Error
-	})
+	// return m.RunWithValue(value, func(stmt *gorm.Statement) error {
+	// 	return m.DB.Exec(
+	// 		"ALTER INDEX ?.? RENAME TO ?", // wat
+	// 		clause.Table{Name: stmt.Table}, clause.Column{Name: oldName}, clause.Column{Name: newName},
+	// 	).Error
+	// })
 }
 
 func (m Migrator) TryRemoveOnUpdate(values ...interface{}) error {
