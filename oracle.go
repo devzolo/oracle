@@ -122,8 +122,8 @@ func (d Dialector) RewriteLimit(c clause.Clause, builder clause.Builder) {
 				builder.WriteString(" ROWS")
 			}
 
-			if limit.Limit != 0 {
-				if limit := limit.Limit; limit > 0 {
+			if limit.Limit != nil {
+				if limit := *limit.Limit; limit > 0 {
 					builder.WriteString(" FETCH NEXT ")
 					builder.WriteString(strconv.Itoa(limit))
 					builder.WriteString(" ROWS ONLY")
@@ -131,7 +131,7 @@ func (d Dialector) RewriteLimit(c clause.Clause, builder clause.Builder) {
 			}
 		} else {
 			if stmt, ok := builder.(*gorm.Statement); ok {
-				if limit.Offset > 0 || limit.Limit > 0 {
+				if limit.Offset > 0 || *limit.Limit > 0 {
 					originalSQL := stmt.SQL.String()
 					undesiredPrefix := "SELECT * FROM GEEMPRES ORDER BY 1"
 					originalSQL = strings.TrimPrefix(originalSQL, undesiredPrefix)
@@ -147,7 +147,7 @@ func (d Dialector) RewriteLimit(c clause.Clause, builder clause.Builder) {
 					}
 
 					wrapperStart := "SELECT * FROM (SELECT GORM_WRAPPER.*, ROWNUM GORM_RN FROM ("
-					wrapperEnd := fmt.Sprintf(") GORM_WRAPPER WHERE ROWNUM <= %d) WHERE GORM_RN > %d", limit.Offset+limit.Limit, limit.Offset)
+					wrapperEnd := fmt.Sprintf(") GORM_WRAPPER WHERE ROWNUM <= %d) WHERE GORM_RN > %d", limit.Offset+*limit.Limit, limit.Offset)
 
 					finalSQL := wrapperStart + originalSQL + wrapperEnd
 					stmt.SQL.Reset()
