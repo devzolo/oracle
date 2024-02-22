@@ -152,8 +152,6 @@ func (d Dialector) RewriteLimit(c clause.Clause, builder clause.Builder) {
 					finalSQL := wrapperStart + originalSQL + wrapperEnd
 					stmt.SQL.Reset()
 					stmt.SQL.WriteString(finalSQL)
-
-					fmt.Println(finalSQL)
 				}
 			}
 		}
