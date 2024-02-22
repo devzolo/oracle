@@ -62,20 +62,19 @@ func (d Dialector) Initialize(db *gorm.DB) (err error) {
 
 	if d.Conn != nil {
 		db.ConnPool = d.Conn
+		if d.Version == "" {
+			var version int
+			version, err := d.getOracleVersion(d.Conn)
+			if err != nil {
+				return err
+			}
+			d.Version = strconv.Itoa(version)
+		}
 	} else {
 		db.ConnPool, err = sql.Open(d.DriverName, d.DSN)
 		if err != nil {
 			return err
 		}
-	}
-
-	if d.Version == "" {
-		var version int
-		version, err = d.getOracleVersion(db)
-		if err != nil {
-			return err
-		}
-		d.Version = strconv.Itoa(version)
 	}
 
 	if err = db.Callback().Create().Replace("gorm:create", Create); err != nil {
@@ -285,11 +284,11 @@ func (d Dialector) RollbackTo(tx *gorm.DB, name string) error {
 	return tx.Error
 }
 
-func (d *Dialector) getOracleVersion(db *gorm.DB) (int, error) {
+func (d *Dialector) getOracleVersion(db *sql.DB) (int, error) {
 	var versionString string
 	var majorVersion int
 
-	row := db.Raw("SELECT version FROM product_component_version WHERE product LIKE 'Oracle%'").Row()
+	row := db.QueryRow("SELECT version FROM product_component_version WHERE product LIKE 'Oracle%'")
 	if err := row.Scan(&versionString); err != nil {
 		return 0, err
 	}
